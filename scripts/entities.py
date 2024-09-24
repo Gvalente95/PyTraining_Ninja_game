@@ -1,6 +1,7 @@
 import math
 import random
 import pygame
+import time
 
 from scripts.particle import Particle
 from scripts.spark import Spark
@@ -90,6 +91,7 @@ class Enemy(PhysicsEntity):
         super().__init__(game, "enemy", pos, size)
 
         self.walking = 0
+        self.alive = 1
 
     def update(self, tilemap, movement=(0, 0)):
         if self.walking:
@@ -110,8 +112,14 @@ class Enemy(PhysicsEntity):
                 )
                 if abs(dis[1]) < 16:
                     if self.flip and dis[0] < 0:
+                        self.game.sfx["shoot"].play()
                         self.game.projectiles.append(
-                            [[self.rect().centerx - 7, self.rect().centery], -1.5, 0]
+                            [
+                                [self.rect().centerx - 7, self.rect().centery],
+                                -1.5,
+                                0,
+                                False,
+                            ]
                         )
                         for i in range(4):
                             self.game.sparks.append(
@@ -123,7 +131,12 @@ class Enemy(PhysicsEntity):
                             )
                     if not self.flip and dis[0] > 0:
                         self.game.projectiles.append(
-                            [[self.rect().centerx + 7, self.rect().centery], 1.5, 0]
+                            [
+                                [self.rect().centerx + 7, self.rect().centery],
+                                1.5,
+                                0,
+                                False,
+                            ]
                         )
                         for i in range(4):
                             self.game.sparks.append(
@@ -137,44 +150,47 @@ class Enemy(PhysicsEntity):
             self.walking = random.randint(30, 120)
 
         super().update(tilemap, movement=movement)
-
         if movement[0] != 0:
             self.set_action("run")
         else:
             self.set_action("idle")
 
-        if abs(self.game.player.dashing) >= 50:
+        if abs(self.game.player.dashing) >= 50 or self.game.player.powJump > 0:
             if self.rect().colliderect(self.game.player.rect()):
-                for i in range(30):
-                    angle = random.random() * math.pi * 2
-                    speed = random.random() * 5
-                    self.game.sparks.append(
-                        Spark(
-                            self.rect().center,
-                            angle,
-                            2 + random.random(),
-                        )
-                    )
-                    self.game.particles.append(
-                        Particle(
-                            self.game,
-                            "particle",
-                            self.rect().center,
-                            velocity=[
-                                math.cos(angle + math.pi) * speed * 0.5,
-                                math.sin(angle + math.pi) * speed * 0.5,
-                            ],
-                            frame=random.randint(0, 7),
-                        )
-                    )
-                    self.game.sparks.append(
-                        Spark(self.rect().center, 0, 5 + random.random())
-                    )
-                    self.game.sparks.append(
-                        Spark(self.rect().center, math.pi, 5 + random.random())
-                    )
+                self.alive = 0
 
-                return True
+        if self.game.player.attacking == 15:
+            if self.rect().colliderect(self.game.player.attack_rect()):
+                self.alive = 0
+
+        if self.alive <= 0:
+            self.game.sfx["hit"].play()
+            for i in range(15):
+                angle = random.random() * math.pi * 2
+                speed = random.random() * 5
+                self.game.sparks.append(
+                    Spark(self.rect().center, angle, 2 + random.random(), (150, 0, 0))
+                )
+                self.game.particles.append(
+                    Particle(
+                        self.game,
+                        "particle",
+                        self.rect().center,
+                        velocity=[
+                            math.cos(angle + math.pi) * speed * 0.5,
+                            math.sin(angle + math.pi) * speed * 0.5,
+                        ],
+                        frame=random.randint(0, 7),
+                    )
+                )
+                self.game.sparks.append(
+                    Spark(self.rect().center, 0, 1 + random.random())
+                )
+                self.game.sparks.append(
+                    Spark(self.rect().center, math.pi, 1 + random.random())
+                )
+
+            return True
 
     def render(self, surf, offset=(0, 0)):
         super().render(surf, offset=offset)
@@ -197,27 +213,162 @@ class Enemy(PhysicsEntity):
             )
 
 
+class Destroyable(PhysicsEntity):
+    def __init__(self, game, pos, size):
+        super().__init__(game, "destroyable", pos, size)
+        self.alive = 1
+
+    def update(self, tilemap, movement=(0, 0)):
+
+        super().update(tilemap, movement=movement)
+
+        if self.collisions["right"] or self.collisions["left"]:
+            return
+
+        if not (self.collisions["right"] or self.collisions["left"]):
+            for dst in self.game.destroyable:
+                if dst != self and self.rect().colliderect(dst.rect()):
+                    self.pos[0] += self.pos[0] - dst.pos[0]
+
+        if self.game.player.attacking == 10:
+            if self.rect().colliderect(self.game.player.attack_rect()):
+                self.alive = 0
+
+        if self.rect().colliderect(self.game.player.rect()):
+            if abs(self.game.player.dashing) >= 50:
+                self.alive = 0
+            elif not self.collisions["right"] or self.collisions["left"]:
+                self.pos[0] += -1 if self.game.player.flip else 1
+                self.game.player.pushing = 1
+
+        if self.alive <= 0:
+            for i in range(15):
+                angle = random.random() * math.pi * 2
+                speed = random.random() * 2
+                self.game.sparks.append(
+                    Spark(self.rect().center, angle, 2, (139, 69, 19))
+                )
+
+            return True
+
+    def render(self, surf, offset=(0, 0)):
+        super().render(surf, offset=offset)
+
+
 class Player(PhysicsEntity):
     def __init__(self, game, pos, size):
         super().__init__(game, "player", pos, size)
         self.air_time = 0
-        self.jumps = 1
+        self.jumps = 2
         self.wall_slide = 0
         self.dashing = 0
+        self.deflecting = 0
+        self.attacking = 0
+        self.pushing = 0
+        self.powJump = 0
+
+    def attack_rect(self):
+        return pygame.Rect(
+            self.pos[0]
+            + (-26 if self.flip else 8),  # Adjust the x position based on flip
+            self.pos[1] - 5,  # y position
+            self.size[0] + 30,  # width of the attack area
+            self.size[1] + 30,  # height of the attack area
+        )
 
     def update(self, tilemap, movement=(0, 0)):
+        if self.powJump >= 28:
+            self.powJump -= 1
+            if self.powJump == 27:
+                self.game.sfx["dash"].play()
+
+            return
+        if self.powJump < 0:
+            self.set_action("powJump")
+            self.powJump -= 1
+            if self.powJump < -30:
+                self.powJump = 0
+            return
         super().update(tilemap, movement=movement)
 
+        self.attacking = max(self.attacking - 1, 0)
+
+        self.powJump = max(0, self.powJump - 1)
+        if self.powJump and not self.collisions["down"]:
+            self.velocity[0] = -0
+            self.velocity[1] = 15
+            for i in range(5):
+                angle = random.random() * math.pi * 2
+                speed = random.random() * 0.5 + 0.5
+                pvelocity = [math.cos(angle) * speed, math.sin(angle) * speed]
+                self.game.particles.append(
+                    Particle(
+                        self.game,
+                        "particle",
+                        self.rect().center,
+                        velocity=pvelocity,
+                        frame=random.randint(0, 7),
+                    )
+                )
+            return
+        if self.powJump:
+            for i in range(50):
+                angle = random.random() * math.pi * 2
+                speed = random.random() * 0.5 + 0.5
+                pvelocity = [math.cos(angle) * speed, math.sin(angle) * speed]
+                self.game.particles.append(
+                    Particle(
+                        self.game,
+                        "particle",
+                        (
+                            self.rect().center[0] + random.randint(-30, 30),
+                            self.rect().center[1] + random.randint(-5, 5),
+                        ),
+                        velocity=pvelocity,
+                        frame=random.randint(0, 1),
+                    )
+                )
+            self.powJump = -1
+
+        if self.attacking:
+            self.set_action("attack")
+            if self.attacking == 10:
+                self.game.sfx["slash"].play()
+                for i in range(2):
+                    self.game.sparks.append(
+                        Spark(
+                            (
+                                (self.pos[0] + (-15 if self.flip else 15)),
+                                self.pos[1] + 3,
+                            ),
+                            random.random() - 0.5 + (math.pi if self.flip else 0),
+                            2 + random.random(),
+                        )
+                    )
+            attack_rect = self.attack_rect()
+            """"
+			pygame.draw.rect(
+				self.game.display_2,
+				(255, 0, 0),
+				pygame.Rect(
+					self.pos[0] - (self.game.scroll[0]) - (26 if self.flip else -8),
+					self.pos[1] - (self.game.scroll[1]) - 5,
+					30,
+					30,
+				),
+				2,
+			)"""
         self.air_time += 1
 
         if self.air_time > 180:
             self.game.dead += 1
         if self.collisions["down"]:
             self.air_time = 0
-            self.jumps = 1
+            self.jumps = 2
 
         self.wall_slide = False
         if self.collisions["right"] or self.collisions["left"] and self.air_time > 4:
+            self.dashing = 0
             self.wall_slide = True
             self.velocity[1] = min(self.velocity[1], 0.5)
             if self.collisions["right"]:
@@ -225,12 +376,13 @@ class Player(PhysicsEntity):
             else:
                 self.flip = True
             self.set_action("wall_slide")
+            self.air_time = min(40, self.air_time)
 
-        if not self.wall_slide:
+        if not self.wall_slide and not self.attacking:
             if self.air_time > 4:
                 self.set_action("jump")
             elif movement[0] != 0:
-                self.set_action("run")
+                self.set_action("push" if self.pushing else "run")
             else:
                 self.set_action("idle")
 
@@ -273,20 +425,26 @@ class Player(PhysicsEntity):
         else:
             self.velocity[0] = min(self.velocity[0] + 0.1, 0)
 
-    def render(self, surf, offset=(0, 0)):
+    def render(self, surf, offset=0):
         if abs(self.dashing) <= 50:
             super().render(surf, offset=offset)
+
+    def attack(self):
+        if self.attacking <= 0:
+            self.attacking += 15
+            return True
+        return False
 
     def jump(self):
         if self.wall_slide:
             if self.flip and self.last_movement[0] < 0:
-                self.velocity[0] = 3.5
+                self.velocity[0] = 2
                 self.velocity[1] = -2.5
                 self.air_time = 5
                 self.jumps = max(0, self.jumps - 1)
                 return True
             elif not self.flip and self.last_movement[0] > 0:
-                self.velocity[0] = -3.5
+                self.velocity[0] = -2
                 self.velocity[1] = -2.5
                 self.air_time = 5
                 self.jumps = max(0, self.jumps - 1)
@@ -296,10 +454,15 @@ class Player(PhysicsEntity):
             self.velocity[1] = -3
             self.jumps -= 1
             self.air_time = 5
+            return True
 
     def dash(self):
         if not self.dashing:
+            self.game.sfx["dash"].play()
             if self.flip:
                 self.dashing = -60
             else:
                 self.dashing = 60
+
+    def power_jump(self):
+        self.powJump = 30

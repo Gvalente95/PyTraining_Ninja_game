@@ -5,16 +5,19 @@ import pygame
 BASE_IMG_PATH = "data/images/"
 
 
-def load_image(path):
+def load_image(path, alpha=250):
     img = pygame.image.load(BASE_IMG_PATH + path).convert()
     img.set_colorkey((0, 0, 0))
+    img.set_alpha(alpha)
     return img
 
 
-def load_images(path):
+def load_images(path, alpha=250):
     images = []
-    for img_name in sorted(os.listdir(BASE_IMG_PATH + path)):
-        images.append(load_image(path + "/" + img_name))
+    full_path = os.path.join(BASE_IMG_PATH, path)
+    for img_name in sorted(os.listdir(full_path)):
+        if img_name.endswith((".png", ".jpg", ".bmp", ".gif")):
+            images.append(load_image(os.path.join(path, img_name), alpha))
     return images
 
 
